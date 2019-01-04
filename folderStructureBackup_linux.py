@@ -77,8 +77,29 @@ import datetime
 import time
 import sys
 import psutil
-if os.name == "nt":
-    import win32api
+from subprocess import check_output
+
+
+def getVolumeInfo(path):
+    val = check_output(['df', '-hT', path]).split("\n")[1].split(" ")
+    val = [v for v in val if v != '']
+    filesystem = val[0]
+    fstype = val[1]
+    fssize = val[2]
+    fsused = val[3]
+    fsavail = val[4]
+    fsmount = val[6]
+
+    val = check_output(['udevadm', 'info', '--query=all', '--name=%s'%filesystem]).strip().split("\n")
+    hddserial = [v.split('=')[-1] for v in val if "ID_SERIAL=" in v][0]
+    fstype2 = [v.split('=')[-1] for v in val if "ID_FS_TYPE=" in v][0]
+    fsuuid = [v.split('=')[-1] for v in val if "ID_FS_UUID=" in v][0]
+    try:
+        fslabel = [v.split('=')[-1] for v in val if "ID_FS_LABEL=" in v][0]
+    except:
+        fslabel = "N/A"
+    return fslabel, fstype, fssize, fsused, fsavail, fsmount, hddserial, fstype2, fsuuid, val
+
 
 # Specify the path of the backup and the rootPath of the folder structure that will be backed up
 if len(sys.argv)==1:
@@ -99,11 +120,11 @@ else:
         hashType = None
         storeHash = False
 
-if not backupPath.endswith("\\"):
-    backupPath = backupPath + "\\"
+if not backupPath.endswith("/"):
+    backupPath = backupPath + "/"
 
-if not rootPath.endswith("\\"):
-    rootPath = rootPath + "\\"
+if not rootPath.endswith("/"):
+    rootPath = rootPath + "/"
 
 # Get the current date and time
 currentDT = datetime.datetime.now()
@@ -163,23 +184,27 @@ elif hashType.lower() == "crc32":
 elif hashType.lower() == "md5":
     getHash = md5
 
-obj_Disk = psutil.disk_usage(rootPath)
-totalSize = float(obj_Disk.used)
+# obj_Disk = psutil.disk_usage(rootPath)
+# totalSize = float(obj_Disk.used)
+totalSize = float(check_output(['du', '-s', rootPath]).split("\t")[0])*1000.0
 
 start = time.time()
 sumSize = 0
 # Windows Code
-if (os.name == "nt") and (storeHash):
+if (os.name == "posix") and (storeHash):
     with open(outputPath, 'w') as f:
         # Walk through all the directories and files in the rootPath specified above and write them to the backup file
         f.write("#%s\n" % (rootPath))
         f.write("#OS: %s\n" % (os.name))
-        info = win32api.GetVolumeInformation('F:\\')
-        f.write("#Volume Name: %s\n" % (info[0]))
-        f.write("#Volume Serial No.: %s\n" % (info[1]))
-        f.write("#Maximum Component Length of File Name: %s\n" % (info[2]))
-        f.write("#System Flags: %s\n" % (info[3]))
-        f.write("#File System Type: %s\n" % (info[4]))
+        f.write("#Date: %s\n"%(currentDT.strftime("%Y%m%d")))
+        f.write("#Time: %s\n"%(currentDT.strftime("%H%M%S")))
+        fslabel, fstype, fssize, fsused, fsavail, fsmount, hddserial, fstype2, fsuuid, val = getVolumeInfo(rootPath)
+        f.write("#Volume Name: %s\n" % (fslabel))
+        f.write("#Volume Serial No.: %s\n" % (hddserial))
+        f.write("#Volume UUID: %s\n"%(fsuuid))
+        f.write("#File System Type: %s, %s\n" % (fstype, fstype2))
+        f.write("#Extra HDD Info Below\n")
+        for v in val:   f.write("#%s\n"%v)
         f.write("#File List Format: file_path, file_size, file_mtime, %s_hash\n" % (hashType))
         for root, dirs, files in os.walk(rootPath, topdown=True):
             f.write("#Files\n")
@@ -208,19 +233,20 @@ if (os.name == "nt") and (storeHash):
                 val = os.path.join(root, name)
                 f.write("%s\n" % (val))
 
-elif (os.name == "nt") and not (storeHash):
+elif (os.name == "posix") and not (storeHash):
     with open(outputPath, 'w') as f:
         # Walk through all the directories and files in the rootPath specified above and write them to the backup file
         f.write("#%s\n" % (rootPath))
         f.write("#OS: %s\n" % (os.name))
         f.write("#Date: %s\n" % (currentDT.strftime("%Y%m%d")))
         f.write("#Time: %s\n" % (currentDT.strftime("%H%M%S")))
-        info = win32api.GetVolumeInformation('F:\\')
-        f.write("#Volume Name: %s\n" % (info[0]))
-        f.write("#Volume Serial No.: %s\n" % (info[1]))
-        f.write("#Maximum Component Length of File Name: %s\n" % (info[2]))
-        f.write("#System Flags: %s\n" % (info[3]))
-        f.write("#File System Type: %s\n" % (info[4]))
+        fslabel, fstype, fssize, fsused, fsavail, fsmount, hddserial, fstype2, fsuuid, val = getVolumeInfo(rootPath)
+        f.write("#Volume Name: %s\n" % (fslabel))
+        f.write("#Volume Serial No.: %s\n" % (hddserial))
+        f.write("#Volume UUID: %s\n" % (fsuuid))
+        f.write("#File System Type: %s, %s\n" % (fstype, fstype2))
+        f.write("#Extra HDD Info Below\n")
+        for v in val:   f.write("#%s\n" % v)
         f.write("#File List Format: file_path, file_size, file_mtime\n")
         for root, dirs, files in os.walk(rootPath, topdown=True):
             f.write("#Files\n")
@@ -234,7 +260,6 @@ elif (os.name == "nt") and not (storeHash):
                     mtime = time.strftime('%Y%m%d_%H%M%S', time.gmtime(os.path.getmtime(val)))
                 except:
                     mtime = "N/A"
-                # print(val)
                 f.write("%s, %s, %s\n" % (val, size, mtime))
                 sumSize += size
                 duration = time.time() - start
@@ -258,5 +283,6 @@ zipped.close()
 
 # Remove the original uncompressed backup file
 os.remove(outputPath)
+
 
 time.sleep(5)
